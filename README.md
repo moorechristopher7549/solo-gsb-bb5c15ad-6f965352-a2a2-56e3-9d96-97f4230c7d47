@@ -14,16 +14,19 @@
 - 可选 **纸张规格与出血 / 安全区适配检查**：输入纸张宽高、成品页宽高、出血与安全边距后，按每个正反页位的实际方向计算可用矩形，逐页位判定成品页是否放得下、出血是否落在纸张内、安全边距是否过大，并在逐张预览与清单中标出不合格页位；
 - 可选 **双面生产标记**：启用适配检查后可勾选，为每张纸正、背面生成**裁切线**（四个成品页外角各两段）、**折线标**（中线上下两端）与**套准十字**（左右出血框外侧，每侧按「居中 → 1/4 → 3/4」固定候选位置顺序尝试）；线段只有**完整落在纸内、避开两侧出血框且不与同面已放置标记相交**才落位，无可用位置则**省略并逐候选返回原因**；背面标记由正面按长边 / 短边翻转做**同一物理位置的坐标变换**，保证正背套准，爬移变化后同步重算；
 - 可选 **试印核验**：对照实物纸张录入 1～12 条观察（帖 / 张 / 正背面 / 左右页位 / 看到的页码或空白 / 内容朝向），服务端用同一输入重算「左/右装订 × 长/短边翻转」四种设置逐条比对，仅唯一零差异组合判定验证通过，并列最优时返回无法判定及并列组合；**无法判定时自动从尚未观察的页位计算「下一处观察建议」**（含定位与各候选预期值）；
+- 可选 **印刷备料**：填写成品份数、每帖开机损耗张数、过程损耗率与每包张数，按拼版结果**各帖实际张数**逐帖计算净用纸，并以 `需领纸 = ceil((净用纸 + 开机损耗) / (1 − 过程损耗率))` **逐帖向上取整**，再汇总后按整包向上采购（**禁止先合并各帖再计算损耗**）；页面逐帖展示净用纸、开机损耗、过程损耗与需领纸及整包采购汇总，导出 JSON 的 `materialPrep` 段附带相同数据；
 - 画布**逐张显示**纸面、页码、空白页位与翻转方向示意；
-- 一键**导出拼版清单 JSON**（包含适配检查与试印核验结果）。
+- 一键**导出拼版清单 JSON**（包含适配检查、试印核验与印刷备料结果）。
 
-## 快速开始（Docker）
+## 快速开始（Docker Compose 一键启动）
 
 ```bash
 docker compose up --build
 ```
 
-启动后访问：**http://localhost:8080**
+启动后浏览器访问：**http://localhost:8080**
+
+（停止服务：`Ctrl + C`；后台运行：`docker compose up --build -d`；移除容器：`docker compose down`。）
 
 ## 本地开发
 
@@ -242,6 +245,62 @@ npm test           # 运行拼版逻辑单元测试
 
 前端在无法判定横幅下展示建议框与**「查看建议」**按钮，点击跳到对应纸张并以青色框高亮建议页位；分组列出各候选预期（页码 / 空白 + 朝向）；增删观察或重新生成后建议同步刷新（已无建议时明确提示）。点击差异行（或观察列表中的条目）仍可跳到对应纸张并高亮页位；「导出拼版清单 JSON」中包含 `verification`（观察、候选评分、结论与 `nextSuggestion`）。非法索引（帖 / 张越界）、重复观察（同一帖 / 张 / 面 / 页位）与非法字段值都会返回 400 明确错误；不录入观察时流程与之前完全一致。
 
+### 印刷备料（printing material preparation）
+
+勾选表单中的「印刷备料」并填写以下参数后启用（API 传 `materialPrep: { copies, makereadySheets, processWasteRate, sheetsPerPack }`）；缺省 / 不传 / `null` / `false` / `{ "enabled": false }` 时**不启用，响应中不含任何备料字段，与旧版本完全一致**。
+
+- **成品份数** `copies`：≥ 1 的整数（每份成品需要每帖全部纸张各一张）；
+- **每帖开机损耗张数** `makereadySheets`：≥ 0 的整数，**每个帖分别加一次**（各帖独立开机校机）；
+- **过程损耗率** `processWasteRate`：0 ≤ r < 1 的小数，`0.03` 表示 3%（表单按百分数填写，自动除以 100 上送）；
+- **每包张数** `sheetsPerPack`：≥ 1 的整数，最终采购量按整包向上取整。
+
+计算**按帖独立进行，逐帖取整后再汇总**（核心约束：禁止先合并各帖再计算损耗）：
+
+1. **净用纸（帖）** = 该帖实际张数（固定 / 均衡 / 章节优先分帖下均取 `actualSheetCount`，含补白纸）× 成品份数；
+2. **需领纸（帖）** = `ceil((净用纸 + 开机损耗) / (1 − 过程损耗率))`，每个帖**分别**向上取整；
+3. **过程损耗（帖）** = 需领纸 − 净用纸 − 开机损耗（≥ 0，含该帖的取整余量）；
+4. **汇总** = 各帖净用纸 / 开机损耗 / 过程损耗 / 需领纸分别相加；
+5. **整包采购** = 采购包数 `ceil(需领纸合计 / 每包张数)`，采购张数 = 包数 × 每包张数，包余 = 采购张数 − 需领纸合计。
+
+> 逐帖 `ceil` 后汇总通常比「合并后再算一次」多领纸（各帖取整余量之和），这是工艺要求——各帖独立开机、独立损耗管控，系统不会跨帖平摊。
+
+示例：16 页、每帖 2 张（2 帖各 2 张）、1000 份、每帖开机损耗 10 张、过程损耗率 3%、每包 500 张：
+
+- 每帖净用纸 `2 × 1000 = 2000`，需领纸 `ceil(2010 / 0.97) = 2073` 张，过程损耗 63 张；
+- 汇总：净用纸 4000 + 开机损耗 20 + 过程损耗 126 = **需领纸 4146 张**（若先合并：`ceil(4010/0.97) = 4135`，少 11 张，被明确禁止）；
+- 整包采购：`ceil(4146 / 500) = 9` 包 × 500 = **4500 张**，包余 354 张。
+
+顶层 `materialPrep` 段示例：
+
+```json
+{
+  "enabled": true,
+  "copies": 1000,
+  "makereadySheets": 10,
+  "processWasteRate": 0.03,
+  "sheetsPerPack": 500,
+  "formula": "requiredSheets = ceil((netSheets + makereadySheets) / (1 - processWasteRate))，逐帖取整后汇总",
+  "signatures": [
+    { "signature": 1, "actualSheetCount": 2, "copies": 1000,
+      "netSheets": 2000, "makereadySheets": 10, "processWaste": 63, "totalWaste": 73, "requiredSheets": 2073 }
+  ],
+  "totals": {
+    "signatureCount": 2,
+    "netSheets": 4000,
+    "makereadySheets": 20,
+    "processWaste": 126,
+    "totalWaste": 146,
+    "requiredSheets": 4146,
+    "purchasePacks": 9,
+    "sheetsPerPack": 500,
+    "purchaseSheets": 4500,
+    "packRemainder": 354
+  }
+}
+```
+
+前端结果区「**印刷备料**」面板逐帖列出每帖实际张数、净用纸、开机损耗、过程损耗、损耗合计与需领纸，底部汇总行给出合计，顶部 chips 给出需领纸合计与整包采购（包数 / 张数 / 包余）；导出的拼版清单 JSON 含同一 `materialPrep` 段。备料只读取拼版结果中各帖的实际张数，固定 / 均衡 / 章节优先分帖均可启用，不影响页码拼版本身。
+
 ## API
 
 ### `POST /api/impose`
@@ -270,7 +329,13 @@ npm test           # 运行拼版逻辑单元测试
   "observations": [
     { "signature": 1, "sheet": 1, "side": "front", "position": "right", "page": 1, "orientation": "upright" },
     { "signature": 1, "sheet": 1, "side": "back", "position": "left", "page": null, "orientation": "upright" }
-  ]
+  ],
+  "materialPrep": {
+    "copies": 1000,
+    "makereadySheets": 10,
+    "processWasteRate": 0.03,
+    "sheetsPerPack": 500
+  }
 }
 ```
 
@@ -293,6 +358,12 @@ npm test           # 运行拼版逻辑单元测试
   - `page`：看到的页码（1 ~ totalPages 的整数），或 `null` 表示看到空白页
   - `orientation`：`upright`（正向）/ `rotated`（倒置 180°）
   - 同一帖 / 张 / 面 / 页位的重复观察、索引越界、字段非法均返回 400 明确错误
+- `materialPrep`：**可选**，印刷备料参数对象（缺省 / `null` / `false` 不启用，响应不含备料字段，与旧版本完全一致）。字段：
+  - `copies`：成品份数，≥ 1 的整数；
+  - `makereadySheets`：每帖开机损耗张数，≥ 0 的整数（每帖分别加一次）；
+  - `processWasteRate`：过程损耗率，0 ≤ r < 1 的小数（`0.03` = 3%）；
+  - `sheetsPerPack`：每包张数，≥ 1 的整数。
+  - 逐帖 `ceil((净用纸 + 开机损耗) / (1 − 过程损耗率))` 后汇总，再按每包向上取整采购；参数非对象、份数 / 包数非正整数、开机损耗为负、损耗率越界（< 0 或 ≥ 1）均返回 400 明确错误。
 
 后两个爬移参数任一为 0（或不传）时不做爬移补偿，所有页位 `offsetMm` 为 0，旧调用方无需改动。
 
@@ -408,7 +479,9 @@ npm test           # 运行拼版逻辑单元测试
 
 未启用核验时 `verification` 仅为 `{ "enabled": false }`。
 
-参数非法时返回 `400` 与错误信息（含纸张厚度 / 最大补偿量为负，尺寸参数为负、非数字或只提供部分尺寸，`balancedSplit` / `chapterSplit` 非布尔值，两种分帖模式同时启用，章节起始页非数组 / 为空 / 非整数 / 重复 / 未递增 / 越界，观察记录非数组 / 超过 12 条 / 索引越界 / 重复观察 / 字段非法，`productionMarks` 非布尔值、未启用适配检查就开启生产标记、`markSizeMm` 非正数或超过 100mm 等情况）。另提供 `GET /api/health` 健康检查。
+启用印刷备料时，顶层增加 `materialPrep`（结构与示例见上文「印刷备料」一节）：逐帖 `signatures[]` 给出 `signature` / `actualSheetCount` / `copies` / `netSheets`（净用纸）/ `makereadySheets`（开机损耗）/ `processWaste`（过程损耗，含逐帖取整余量）/ `totalWaste`（损耗合计）/ `requiredSheets`（需领纸）；`totals` 给出逐帖汇总后的净用纸 / 各类损耗 / 需领纸合计，以及整包采购 `purchasePacks`（采购包数）/ `sheetsPerPack` / `purchaseSheets`（采购张数）/ `packRemainder`（包余）。未启用时响应中不含 `materialPrep` 字段。
+
+参数非法时返回 `400` 与错误信息（含纸张厚度 / 最大补偿量为负，尺寸参数为负、非数字或只提供部分尺寸，`balancedSplit` / `chapterSplit` 非布尔值，两种分帖模式同时启用，章节起始页非数组 / 为空 / 非整数 / 重复 / 未递增 / 越界，观察记录非数组 / 超过 12 条 / 索引越界 / 重复观察 / 字段非法，`productionMarks` 非布尔值、未启用适配检查就开启生产标记、`markSizeMm` 非正数或超过 100mm，以及备料参数 `materialPrep` 非对象、成品份数 / 每包张数非正整数、开机损耗为负、过程损耗率不在 [0, 1) 等情况）。另提供 `GET /api/health` 健康检查。
 
 调用示例（生成带双面生产标记的拼版清单，460×330 纸张放 210×297 成品页，短边翻转）：
 
@@ -432,6 +505,23 @@ curl -s -X POST http://localhost:8080/api/impose \
 # => { "enabled": true, "markSizeMm": 5, "placedCount": 48, "omittedCount": 0 }
 ```
 
+调用示例（启用印刷备料：16 页、2 帖各 2 张、1000 份、每帖开机损耗 10 张、过程损耗率 3%、每包 500 张）：
+
+```bash
+curl -s -X POST http://localhost:8080/api/impose \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "totalPages": 16,
+    "sheetsPerSignature": 2,
+    "binding": "left",
+    "flip": "short",
+    "materialPrep": { "copies": 1000, "makereadySheets": 10, "processWasteRate": 0.03, "sheetsPerPack": 500 }
+  }' | jq '.materialPrep.totals'
+# => { "signatureCount": 2, "netSheets": 4000, "makereadySheets": 20, "processWaste": 126,
+#      "totalWaste": 146, "requiredSheets": 4146, "purchasePacks": 9,
+#      "sheetsPerPack": 500, "purchaseSheets": 4500, "packRemainder": 354 }
+```
+
 ## 目录结构
 
 ```
@@ -440,7 +530,8 @@ curl -s -X POST http://localhost:8080/api/impose \
 ├── src/fitCheck.js        # 纸张规格与出血 / 安全区适配检查（可用矩形、trim/bleed/safe、超限原因）
 ├── src/productionMarks.js # 双面生产标记（裁切线 / 折线标 / 套准十字候选落位、正背坐标变换、省略原因）
 ├── src/verification.js    # 试印核验（观察校验、四种装订×翻转重算比对、候选排序与结论）
-├── public/                # 前端（原生 Canvas 逐张绘制、原始/补偿页位叠加、适配标记、生产标记、试印核验面板、JSON 导出）
+├── src/materialPrep.js    # 印刷备料（逐帖净用纸 / 开机损耗 / 过程损耗 / 需领纸 ceil、整包采购汇总）
+├── public/                # 前端（原生 Canvas 逐张绘制、原始/补偿页位叠加、适配标记、生产标记、试印核验面板、印刷备料面板、JSON 导出）
 │   ├── index.html
 │   ├── app.js
 │   └── style.css
@@ -449,6 +540,7 @@ curl -s -X POST http://localhost:8080/api/impose \
 ├── test/productionMarks.test.js
 ├── test/chapterSplit.test.js
 ├── test/verification.test.js
+├── test/materialPrep.test.js
 ├── test/api.test.js
 ├── Dockerfile
 └── docker-compose.yml

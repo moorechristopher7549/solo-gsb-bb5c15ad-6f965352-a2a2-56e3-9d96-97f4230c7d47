@@ -189,6 +189,54 @@ button.ghost:disabled {
   font-weight: 600;
 }
 
+/* ------------------------------ 印刷备料 ------------------------------ */
+
+.prep-card {
+  border: 1px solid #e3e8f0;
+  border-radius: 8px;
+  background: #fafbfc;
+  padding: 4px 16px 16px;
+  margin-bottom: 8px;
+}
+
+.prep-card h2 {
+  margin-top: 12px;
+}
+
+.summary .chip.prep {
+  background: #eef4ff;
+  color: #1d4ed8;
+}
+
+.summary .chip.prep-warn {
+  background: #fff4e0;
+  color: #b35900;
+}
+
+.summary .chip.prep-total {
+  background: #f0ebfc;
+  color: #5f3dc4;
+  font-weight: 600;
+}
+
+.summary .chip.prep-buy {
+  background: #e6f7ec;
+  color: #1e7e34;
+  font-weight: 600;
+}
+
+.summary .chip.prep-ok {
+  background: #e6f7ec;
+  color: #1e7e34;
+}
+
+#prepTable tfoot td {
+  background: #f4f6fa;
+  font-weight: 600;
+  position: sticky;
+  bottom: 0;
+}
+
 .slot-fit {
   margin-top: 2px;
   font-size: 12px;

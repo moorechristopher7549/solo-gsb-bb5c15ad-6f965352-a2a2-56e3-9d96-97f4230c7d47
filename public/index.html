@@ -97,6 +97,28 @@
         <label for="markSizeMm">生产标记尺寸（mm，可选）</label>
         <input id="markSizeMm" type="number" min="0.1" max="100" step="0.1" placeholder="缺省 5">
       </div>
+      <div class="field checkbox-field">
+        <label for="materialPrepEnabled">
+          <input id="materialPrepEnabled" type="checkbox">
+          <span>印刷备料（按拼版各帖实际张数估算用纸：逐帖计算净用纸、开机损耗、过程损耗与需领纸，再汇总按整包向上采购）</span>
+        </label>
+      </div>
+      <div class="field">
+        <label for="prepCopies">成品份数</label>
+        <input id="prepCopies" type="number" min="1" max="100000000" step="1" value="1000" disabled>
+      </div>
+      <div class="field">
+        <label for="prepMakeready">每帖开机损耗张数</label>
+        <input id="prepMakeready" type="number" min="0" max="1000000" step="1" value="10" disabled>
+      </div>
+      <div class="field">
+        <label for="prepWasteRate">过程损耗率（%）</label>
+        <input id="prepWasteRate" type="number" min="0" max="99.999" step="0.1" value="3" disabled>
+      </div>
+      <div class="field">
+        <label for="prepSheetsPerPack">每包张数</label>
+        <input id="prepSheetsPerPack" type="number" min="1" max="100000000" step="1" value="500" disabled>
+      </div>
       <div class="field actions">
         <button type="submit">生成拼版</button>
       </div>
@@ -120,6 +142,13 @@
       <strong>折线标</strong>（中线上下两端）与<strong>套准十字</strong>（左右出血框外侧）；每个标记按固定候选位置顺序尝试，
       只有线段完整落在纸内、避开两侧出血框且不与已放置标记相交才落位，无可用位置则省略；背面标记由正面按长边 / 短边翻转
       做同一物理位置的坐标变换，保证正背套准。画布按纸张 mm 等比绘制，省略的标记逐张列出原因，导出 JSON 含每个标记的坐标与原因。
+    </p>
+    <p class="hint">
+      印刷备料（可选）：勾选并填写成品份数、每帖开机损耗张数、过程损耗率（%）与每包张数后，系统按拼版结果<strong>各帖实际张数</strong>
+      逐帖计算——净用纸 = 每帖实际张数 × 成品份数；<strong>需领纸 = ceil((净用纸 + 开机损耗) / (1 − 过程损耗率))</strong>，
+      各帖<strong>分别向上取整</strong>后再汇总（禁止先合并各帖再算损耗）；汇总后的需领纸合计按每包张数<strong>向上取整</strong>得到整包采购量。
+      结果区逐帖展示净用纸、开机损耗、过程损耗与需领纸，并给出整包采购汇总；导出的拼版清单 JSON 在 <code>materialPrep</code> 段附带相同数据。
+      不勾选时不进行任何备料计算，响应与之前完全一致。
     </p>
     <p class="error" id="errorBox" hidden></p>
   </section>
@@ -197,6 +226,24 @@
         <div id="verifyResult"></div>
       </aside>
     </div>
+
+    <section id="materialPrepCard" class="prep-card" hidden>
+      <h2>印刷备料</h2>
+      <p class="hint" id="prepFormula"></p>
+      <div class="summary" id="prepSummary"></div>
+      <div class="table-wrap">
+        <table id="prepTable">
+          <thead>
+            <tr>
+              <th>帖</th><th>每帖实际张数</th><th>成品份数</th><th>净用纸（张）</th>
+              <th>开机损耗（张）</th><th>过程损耗（张）</th><th>损耗合计（张）</th><th>需领纸（张）</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+    </section>
 
     <h2>拼版清单</h2>
     <div class="table-wrap">

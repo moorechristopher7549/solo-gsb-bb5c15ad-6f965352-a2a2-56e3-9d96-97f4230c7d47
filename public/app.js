@@ -29,6 +29,16 @@ const chapterSplitBox = document.getElementById('chapterSplit');
 const chapterStartsInput = document.getElementById('chapterStarts');
 const productionMarksBox = document.getElementById('productionMarks');
 const markSizeInput = document.getElementById('markSizeMm');
+const materialPrepBox = document.getElementById('materialPrepEnabled');
+const prepCopiesInput = document.getElementById('prepCopies');
+const prepMakereadyInput = document.getElementById('prepMakeready');
+const prepWasteRateInput = document.getElementById('prepWasteRate');
+const prepSheetsPerPackInput = document.getElementById('prepSheetsPerPack');
+const materialPrepCard = document.getElementById('materialPrepCard');
+const prepSummary = document.getElementById('prepSummary');
+const prepFormula = document.getElementById('prepFormula');
+const prepTableBody = document.querySelector('#prepTable tbody');
+const prepTableFoot = document.querySelector('#prepTable tfoot');
 const obsForm = document.getElementById('obsForm');
 const obsSignature = document.getElementById('obsSignature');
 const obsSheet = document.getElementById('obsSheet');
@@ -64,6 +74,17 @@ productionMarksBox.addEventListener('change', () => {
   markSizeInput.disabled = !productionMarksBox.checked;
 });
 markSizeInput.disabled = true;
+
+/* 印刷备料参数仅在勾选启用时可填 */
+materialPrepBox.addEventListener('change', () => {
+  [prepCopiesInput, prepMakereadyInput, prepWasteRateInput, prepSheetsPerPackInput].forEach((el) => {
+    el.disabled = !materialPrepBox.checked;
+  });
+  if (materialPrepBox.checked) prepCopiesInput.focus();
+});
+[prepCopiesInput, prepMakereadyInput, prepWasteRateInput, prepSheetsPerPackInput].forEach((el) => {
+  el.disabled = true;
+});
 
 /** 解析章节起始页输入：支持逗号 / 顿号 / 分号 / 空白分隔；无法解析的 token 原样上送，由服务端给出明确错误。 */
 function parseChapterStarts(raw) {
@@ -132,6 +153,15 @@ form.addEventListener('submit', async (event) => {
     // 仅勾选启用时上送尺寸；留空 / 未勾选时由服务端取缺省（不参与未启用流程）
     markSizeMm: productionMarksBox.checked && markSizeInput.value.trim() !== ''
       ? Number(markSizeInput.value)
+      : undefined,
+    // 印刷备料：仅勾选时上送；过程损耗率百分数换算为小数（3% -> 0.03）
+    materialPrep: materialPrepBox.checked
+      ? {
+          copies: Number(prepCopiesInput.value),
+          makereadySheets: Number(prepMakereadyInput.value),
+          processWasteRate: Number(prepWasteRateInput.value) / 100,
+          sheetsPerPack: Number(prepSheetsPerPackInput.value),
+        }
       : undefined,
   };
   // 已录入观察时随生成一并核验；无观察时请求体与原流程完全一致
@@ -203,6 +233,7 @@ function renderAll() {
   renderSummary();
   renderSheetNav();
   renderTable();
+  renderMaterialPrep();
   jsonPreview.textContent = JSON.stringify(state.result, null, 2);
   renderObsPanel();
   draw();
@@ -288,6 +319,13 @@ function renderSummary() {
         ? { text: `生产标记：已放置 ${r.productionMarks.placedCount} 个（尺寸 ${formatMm(r.productionMarks.markSizeMm)} mm）`, cls: 'fit-ok' }
         : { text: `生产标记：放置 ${r.productionMarks.placedCount} 个 · 省略 ${r.productionMarks.omittedCount} 个`, cls: 'fit-fail' }
     );
+  }
+  if (r.materialPrep && r.materialPrep.enabled) {
+    const t = r.materialPrep.totals;
+    chips.push({
+      text: `印刷备料：${formatSheets(t.requiredSheets)} 张 → 整包采购 ${formatSheets(t.purchasePacks)} 包（${formatSheets(t.purchaseSheets)} 张）`,
+      cls: 'prep-buy',
+    });
   }
   summaryBox.innerHTML = '';
   chips.forEach(({ text, cls }) => {
@@ -432,6 +470,89 @@ function renderTable() {
       });
     });
   });
+}
+
+/* ------------------------------ 印刷备料 ------------------------------ */
+
+/** 过程损耗率（小数）格式化为百分数：0.03 -> 3%，0.035 -> 3.5%。 */
+function formatPercent(rate) {
+  const pct = Math.round(rate * 100000) / 1000; // 保留最多 3 位小数
+  return `${String(pct)}%`;
+}
+
+/** 整数千分位格式化。 */
+function formatSheets(n) {
+  return n.toLocaleString('zh-CN');
+}
+
+/** 渲染印刷备料：公式说明、整包采购汇总 chips 与逐帖明细表；未启用时隐藏整个区块。 */
+function renderMaterialPrep() {
+  const mp = state.result.materialPrep;
+  if (!mp || !mp.enabled) {
+    materialPrepCard.hidden = true;
+    return;
+  }
+  materialPrepCard.hidden = false;
+  prepFormula.textContent =
+    `逐帖计算：净用纸 = 每帖实际张数 × 成品份数；需领纸 = ceil((净用纸 + 开机损耗 ${mp.makereadySheets} 张) / (1 − ${formatPercent(mp.processWasteRate)}))，` +
+    '各帖分别向上取整后再汇总（不先合并各帖）；汇总后按每包 ' + formatSheets(mp.sheetsPerPack) + ' 张向上取整采购。';
+
+  const t = mp.totals;
+  const chips = [
+    { text: `成品份数 ${formatSheets(mp.copies)} 份`, cls: 'prep' },
+    { text: `共 ${t.signatureCount} 帖`, cls: 'prep' },
+    { text: `净用纸合计 ${formatSheets(t.netSheets)} 张`, cls: 'prep' },
+    { text: `开机损耗合计 ${formatSheets(t.makereadySheets)} 张`, cls: 'prep-warn' },
+    { text: `过程损耗合计 ${formatSheets(t.processWaste)} 张（${formatPercent(mp.processWasteRate)}，含逐帖取整余量）`, cls: 'prep-warn' },
+    { text: `需领纸合计 ${formatSheets(t.requiredSheets)} 张`, cls: 'prep-total' },
+    { text: `整包采购：${formatSheets(t.purchasePacks)} 包 × ${formatSheets(t.sheetsPerPack)} 张 = ${formatSheets(t.purchaseSheets)} 张`, cls: 'prep-buy' },
+    { text: `包余 ${formatSheets(t.packRemainder)} 张`, cls: t.packRemainder > 0 ? 'prep-warn' : 'prep-ok' },
+  ];
+  prepSummary.innerHTML = '';
+  chips.forEach(({ text, cls }) => {
+    const span = document.createElement('span');
+    span.className = 'chip' + (cls ? ` ${cls}` : '');
+    span.textContent = text;
+    prepSummary.appendChild(span);
+  });
+
+  prepTableBody.innerHTML = '';
+  mp.signatures.forEach((row) => {
+    const tr = document.createElement('tr');
+    [
+      `第 ${row.signature} 帖`,
+      formatSheets(row.actualSheetCount),
+      formatSheets(row.copies),
+      formatSheets(row.netSheets),
+      formatSheets(row.makereadySheets),
+      formatSheets(row.processWaste),
+      formatSheets(row.totalWaste),
+      formatSheets(row.requiredSheets),
+    ].forEach((text) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    prepTableBody.appendChild(tr);
+  });
+
+  prepTableFoot.innerHTML = '';
+  const footTr = document.createElement('tr');
+  [
+    '合计（逐帖取整后汇总）',
+    '—',
+    '—',
+    formatSheets(t.netSheets),
+    formatSheets(t.makereadySheets),
+    formatSheets(t.processWaste),
+    formatSheets(t.totalWaste),
+    formatSheets(t.requiredSheets),
+  ].forEach((text) => {
+    const td = document.createElement('td');
+    td.textContent = text;
+    footTr.appendChild(td);
+  });
+  prepTableFoot.appendChild(footTr);
 }
 
 /* ------------------------------ 试印核验 ------------------------------ */

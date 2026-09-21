@@ -315,3 +315,58 @@ test('双面生产标记：未启用适配检查 / 尺寸非法返回 400；缺�
     await srv.close();
   }
 });
+
+test('印刷备料：响应 materialPrep 含逐帖数据与整包采购汇总；未启用不带该字段', async () => {
+  const srv = await startServer();
+  try {
+    const prep = { copies: 1000, makereadySheets: 10, processWasteRate: 0.03, sheetsPerPack: 500 };
+    const res = await postJson(`${srv.baseUrl}/api/impose`, { ...BASE, materialPrep: prep });
+    assert.equal(res.status, 200);
+    const mp = res.body.materialPrep;
+    assert.equal(mp.enabled, true);
+    assert.equal(mp.copies, 1000);
+    assert.equal(mp.processWasteRate, 0.03);
+    assert.equal(mp.signatures.length, res.body.signatureCount);
+    // BASE 为 8 页 2 张/帖 -> 1 帖：2 张 × 1000 = 2000，ceil(2010/0.97) = 2073
+    mp.signatures.forEach((row, i) => {
+      assert.equal(row.signature, i + 1);
+      assert.equal(row.actualSheetCount, 2);
+      assert.equal(row.netSheets, 2000);
+      assert.equal(row.makereadySheets, 10);
+      assert.equal(row.requiredSheets, 2073);
+    });
+    const t = mp.totals;
+    assert.equal(t.requiredSheets, 2073);
+    assert.equal(t.purchasePacks, 5); // ceil(2073/500)
+    assert.equal(t.purchaseSheets, 2500);
+    assert.equal(t.packRemainder, 427);
+
+    // 未启用：响应不含 materialPrep 字段（原响应不变）
+    const off = await postJson(`${srv.baseUrl}/api/impose`, BASE);
+    assert.equal(off.status, 200);
+    assert.equal('materialPrep' in off.body, false);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('印刷备料：非法参数返回 400', async () => {
+  const srv = await startServer();
+  try {
+    const badRate = await postJson(`${srv.baseUrl}/api/impose`, {
+      ...BASE,
+      materialPrep: { copies: 1000, makereadySheets: 10, processWasteRate: 1, sheetsPerPack: 500 },
+    });
+    assert.equal(badRate.status, 400);
+    assert.match(badRate.body.error, /过程损耗率/);
+
+    const badPack = await postJson(`${srv.baseUrl}/api/impose`, {
+      ...BASE,
+      materialPrep: { copies: 1000, makereadySheets: 10, processWasteRate: 0.03, sheetsPerPack: 0 },
+    });
+    assert.equal(badPack.status, 400);
+    assert.match(badPack.body.error, /每包张数/);
+  } finally {
+    await srv.close();
+  }
+});
