@@ -14,6 +14,7 @@
 - 可选 **纸张规格与出血 / 安全区适配检查**：输入纸张宽高、成品页宽高、出血与安全边距后，按每个正反页位的实际方向计算可用矩形，逐页位判定成品页是否放得下、出血是否落在纸张内、安全边距是否过大，并在逐张预览与清单中标出不合格页位；
 - 可选 **双面生产标记**：启用适配检查后可勾选，为每张纸正、背面生成**裁切线**（四个成品页外角各两段）、**折线标**（中线上下两端）与**套准十字**（左右出血框外侧，每侧按「居中 → 1/4 → 3/4」固定候选位置顺序尝试）；线段只有**完整落在纸内、避开两侧出血框且不与同面已放置标记相交**才落位，无可用位置则**省略并逐候选返回原因**；背面标记由正面按长边 / 短边翻转做**同一物理位置的坐标变换**，保证正背套准，爬移变化后同步重算；
 - 可选 **试印核验**：对照实物纸张录入 1～12 条观察（帖 / 张 / 正背面 / 左右页位 / 看到的页码或空白 / 内容朝向），服务端用同一输入重算「左/右装订 × 长/短边翻转」四种设置逐条比对，仅唯一零差异组合判定验证通过，并列最优时返回无法判定及并列组合；**无法判定时自动从尚未观察的页位计算「下一处观察建议」**（含定位与各候选预期值）；
+- 可选 **印刷备料**：填写成品份数、每帖开机损耗张数、过程损耗率与每包张数后，系统按**每帖实际张数**计算净用纸，并以 `需领纸 = ceil((净用纸 + 开机损耗) / (1 - 过程损耗率))` **逐帖独立取整**，再汇总净用纸 / 开机损耗 / 过程损耗 / 需领纸，最后按每包张数向上取整给出**整包采购量与余量**；**禁止先合并各帖再计算损耗**；逐帖明细与汇总随拼版清单 JSON 导出；
 - 画布**逐张显示**纸面、页码、空白页位与翻转方向示意；
 - 一键**导出拼版清单 JSON**（包含适配检查与试印核验结果）。
 
@@ -242,6 +243,32 @@ npm test           # 运行拼版逻辑单元测试
 
 前端在无法判定横幅下展示建议框与**「查看建议」**按钮，点击跳到对应纸张并以青色框高亮建议页位；分组列出各候选预期（页码 / 空白 + 朝向）；增删观察或重新生成后建议同步刷新（已无建议时明确提示）。点击差异行（或观察列表中的条目）仍可跳到对应纸张并高亮页位；「导出拼版清单 JSON」中包含 `verification`（观察、候选评分、结论与 `nextSuggestion`）。非法索引（帖 / 张越界）、重复观察（同一帖 / 张 / 面 / 页位）与非法字段值都会返回 400 明确错误；不录入观察时流程与之前完全一致。
 
+### 印刷备料（print stock preparation）
+
+勾选表单中的「印刷备料」并填写四个参数后启用（未勾选 / 不传 / 传 `false` 时**响应与旧版本完全一致**）：
+
+- **成品份数** `copies`：≥ 1 的整数；
+- **每帖开机损耗张数** `makereadyWaste`：每帖调机 / 过版损耗，≥ 0 的整数（按帖计，不按张数摊薄）；
+- **过程损耗率** `processWasteRate`：≥ 0 且 < 1 的小数（表单填百分数，前端换算为小数，如 3% 传 `0.03`）；
+- **每包张数** `sheetsPerPack`：纸张按包采购，≥ 1 的整数。
+
+计算顺序（接入现有拼版结果，使用**各帖实际张数** `actualSheetCount`，固定 / 均衡 / 章节优先分帖均适用）：
+
+1. **逐帖净用纸**：`净用纸 = 该帖实际张数 × 成品份数`（自动补白页位同样要上机印刷，计入实际张数）；
+2. **逐帖需领纸（帖内向上取整）**：
+
+   ```
+   需领纸 = ceil((净用纸 + 开机损耗) / (1 - 过程损耗率))
+   ```
+
+   每帖过程损耗 = 需领纸 − 净用纸 − 开机损耗（含逐帖取整多领的张数）；
+3. **汇总**：总净用纸 / 总开机损耗 / 总过程损耗 / 总需领纸 = 各帖之和——**必须在逐帖 ceil 完成之后才允许相加**；
+4. **整包采购（仅一次向上取整）**：`采购包数 = ceil(总需领纸 / 每包张数)`，`采购张数 = 采购包数 × 每包张数`，余量 = 采购张数 − 总需领纸。
+
+> **禁止先合并各帖再计算损耗**：合并口径为 `ceil((Σ净用纸 + Σ开机损耗) / (1-损耗率))`，会漏掉两处必须按帖发生的数量——①开机损耗按每帖调机计（Σ 开机损耗本身就要逐帖相加，这点两种口径一致），但②**逐帖向上取整**各会多领 0～若干张，合并后只取整一次会少领。例如 2 帖各 200 张净用纸、每帖开机 20 张、损耗率 10%：逐帖 `ceil(220/0.9)=245`、合计 **490** 张；错误合并 `ceil(440/0.9)=489` 张，少领 1 张。
+
+页面「印刷备料」区逐帖展示实际张数 / 份数 / 净用纸 / 开机损耗 / 过程损耗 / 损耗合计 / 需领纸，表尾给出汇总行与整包采购行（包数、采购张数、余量）；每个帖对象附 `stockPreparation` 明细，顶层 `stockPreparation` 给出参数、汇总与整包采购，**导出的拼版清单 JSON 附带相同数据**。参数缺失 / 非正整数、损耗率 ≥ 1 或为负、开关非布尔均返回 400 明确错误。
+
 ## API
 
 ### `POST /api/impose`
@@ -267,6 +294,11 @@ npm test           # 运行拼版逻辑单元测试
   "safetyMm": 5,
   "productionMarks": true,
   "markSizeMm": 5,
+  "stockPreparation": true,
+  "copies": 1000,
+  "makereadyWaste": 20,
+  "processWasteRate": 0.03,
+  "sheetsPerPack": 500,
   "observations": [
     { "signature": 1, "sheet": 1, "side": "front", "position": "right", "page": 1, "orientation": "upright" },
     { "signature": 1, "sheet": 1, "side": "back", "position": "left", "page": null, "orientation": "upright" }
@@ -287,6 +319,11 @@ npm test           # 运行拼版逻辑单元测试
 - `bleedMm` / `safetyMm`：**可选**，出血与安全边距（mm，≥ 0，缺省为 0）
 - `productionMarks`：**可选**，`true` 启用双面生产标记（缺省 / `false` 不启用，结果与旧版本完全一致）；启用时必须已提供四项尺寸开启适配检查，否则返回 400
 - `markSizeMm`：**可选**，生产标记尺寸（mm，> 0 且 ≤ 100，缺省 5；仅启用生产标记时校验，空串 / `null` 取缺省值）
+- `stockPreparation`：**可选**，`true` 启用印刷备料（缺省 / `false` 不启用，响应与旧版本完全一致：顶层仅 `{ "enabled": false }`，帖对象不带备料字段）
+- `copies`：**启用备料时必填**，成品份数（≥ 1 的整数，接受数字字符串）
+- `makereadyWaste`：**启用备料时必填**，每帖开机损耗张数（≥ 0 的整数，按帖计）
+- `processWasteRate`：**启用备料时必填**，过程损耗率（≥ 0 且 < 1 的小数，如 `0.03` 表示 3%；1 及以上无意义，返回 400）
+- `sheetsPerPack`：**启用备料时必填**，每包张数（≥ 1 的整数）
 - `observations`：**可选**，试印核验观察数组（1～12 条；缺省 / 空数组不启用核验，结果与旧版本完全一致）。每条：
   - `signature` / `sheet`：帖号 / 张号（1 起始整数；张号不超过该帖实际张数）
   - `side`：`front`（正面）/ `back`（背面）；`position`：`left`（左页位）/ `right`（右页位）
@@ -408,7 +445,43 @@ npm test           # 运行拼版逻辑单元测试
 
 未启用核验时 `verification` 仅为 `{ "enabled": false }`。
 
-参数非法时返回 `400` 与错误信息（含纸张厚度 / 最大补偿量为负，尺寸参数为负、非数字或只提供部分尺寸，`balancedSplit` / `chapterSplit` 非布尔值，两种分帖模式同时启用，章节起始页非数组 / 为空 / 非整数 / 重复 / 未递增 / 越界，观察记录非数组 / 超过 12 条 / 索引越界 / 重复观察 / 字段非法，`productionMarks` 非布尔值、未启用适配检查就开启生产标记、`markSizeMm` 非正数或超过 100mm 等情况）。另提供 `GET /api/health` 健康检查。
+启用印刷备料时，每个帖对象增加 `stockPreparation`，顶层 `stockPreparation` 汇总逐帖数据与整包采购：
+
+```json
+{
+  "enabled": true,
+  "copies": 100,
+  "makereadyWaste": 20,
+  "processWasteRate": 0.05,
+  "sheetsPerPack": 500,
+  "rule": "requiredSheets = ceil((netSheets + makereadyWaste) / (1 - processWasteRate))，逐帖独立取整后汇总，禁止先合并各帖再计算损耗",
+  "totalNetSheets": 200,
+  "totalMakereadyWaste": 20,
+  "totalProcessWaste": 12,
+  "totalWaste": 32,
+  "totalRequired": 232,
+  "packsToBuy": 1,
+  "sheetsToBuy": 500,
+  "spareSheets": 268,
+  "signatures": [
+    {
+      "index": 1,
+      "actualSheetCount": 2,
+      "netSheets": 200,
+      "makereadyWaste": 20,
+      "processWasteRate": 0.05,
+      "requiredSheets": 232,
+      "wasteSheets": 32,
+      "makereadyWasteSheets": 20,
+      "processWasteSheets": 12
+    }
+  ]
+}
+```
+
+各字段：`netSheets`（净用纸 = 实际张数 × 份数）、`requiredSheets`（逐帖 ceil 后的需领纸）、`makereadyWasteSheets` / `processWasteSheets`（开机 / 过程损耗，后者含取整多领张数）、`wasteSheets`（损耗合计）；顶层 `total*` 为逐帖取整后的求和，`packsToBuy` / `sheetsToBuy` / `spareSheets` 为汇总后按每包张数向上取整的整包采购结果。未启用时顶层仅 `{ "enabled": false }`，帖对象不带 `stockPreparation` 字段，`input` 中也不出现任何备料参数。
+
+参数非法时返回 `400` 与错误信息（含纸张厚度 / 最大补偿量为负，尺寸参数为负、非数字或只提供部分尺寸，`balancedSplit` / `chapterSplit` 非布尔值，两种分帖模式同时启用，章节起始页非数组 / 为空 / 非整数 / 重复 / 未递增 / 越界，观察记录非数组 / 超过 12 条 / 索引越界 / 重复观察 / 字段非法，`productionMarks` 非布尔值、未启用适配检查就开启生产标记、`markSizeMm` 非正数或超过 100mm，启用印刷备料时成品份数 / 每包张数非 ≥1 整数、每帖开机损耗非 ≥0 整数、过程损耗率为负或 ≥1、`stockPreparation` 非布尔值等情况）。另提供 `GET /api/health` 健康检查。
 
 调用示例（生成带双面生产标记的拼版清单，460×330 纸张放 210×297 成品页，短边翻转）：
 
@@ -432,6 +505,26 @@ curl -s -X POST http://localhost:8080/api/impose \
 # => { "enabled": true, "markSizeMm": 5, "placedCount": 48, "omittedCount": 0 }
 ```
 
+调用示例（启用印刷备料：2 帖各 2 张、100 份、每帖开机损耗 20 张、过程损耗 10%、每包 250 张）：
+
+```bash
+curl -s -X POST http://localhost:8080/api/impose \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "totalPages": 16,
+    "sheetsPerSignature": 2,
+    "binding": "left",
+    "flip": "short",
+    "stockPreparation": true,
+    "copies": 100,
+    "makereadyWaste": 20,
+    "processWasteRate": 0.1,
+    "sheetsPerPack": 250
+  }' | jq '.stockPreparation | { totalNetSheets, totalRequired, packsToBuy, sheetsToBuy, perSignature: [.signatures[].requiredSheets] }'
+# => { "totalNetSheets": 400, "totalRequired": 490, "packsToBuy": 2, "sheetsToBuy": 500, "perSignature": [245, 245] }
+# 注意逐帖 ceil 后合计 490 张（先合并再算损耗只会得到 489 张，少领 1 张）
+```
+
 ## 目录结构
 
 ```
@@ -439,8 +532,9 @@ curl -s -X POST http://localhost:8080/api/impose \
 ├── src/imposition.js      # 拼版计算核心（固定 / 均衡 / 章节优先分帖、正反面页位、翻转坐标变换、爬移补偿 offsetMm）
 ├── src/fitCheck.js        # 纸张规格与出血 / 安全区适配检查（可用矩形、trim/bleed/safe、超限原因）
 ├── src/productionMarks.js # 双面生产标记（裁切线 / 折线标 / 套准十字候选落位、正背坐标变换、省略原因）
+├── src/stockPrep.js       # 印刷备料（逐帖净用纸 / 开机损耗 / 过程损耗 ceil 取整、汇总与整包采购）
 ├── src/verification.js    # 试印核验（观察校验、四种装订×翻转重算比对、候选排序与结论）
-├── public/                # 前端（原生 Canvas 逐张绘制、原始/补偿页位叠加、适配标记、生产标记、试印核验面板、JSON 导出）
+├── public/                # 前端（原生 Canvas 逐张绘制、原始/补偿页位叠加、适配标记、生产标记、试印核验面板、印刷备料明细、JSON 导出）
 │   ├── index.html
 │   ├── app.js
 │   └── style.css
@@ -448,6 +542,7 @@ curl -s -X POST http://localhost:8080/api/impose \
 ├── test/fitCheck.test.js
 ├── test/productionMarks.test.js
 ├── test/chapterSplit.test.js
+├── test/stockPrep.test.js
 ├── test/verification.test.js
 ├── test/api.test.js
 ├── Dockerfile

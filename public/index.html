@@ -97,6 +97,28 @@
         <label for="markSizeMm">生产标记尺寸（mm，可选）</label>
         <input id="markSizeMm" type="number" min="0.1" max="100" step="0.1" placeholder="缺省 5">
       </div>
+      <div class="field checkbox-field">
+        <label for="stockPreparation">
+          <input id="stockPreparation" type="checkbox">
+          <span>印刷备料（按每帖实际张数计算净用纸，逐帖计开机 / 过程损耗并取整，再按整包汇总采购）</span>
+        </label>
+      </div>
+      <div class="field">
+        <label for="copies">成品份数</label>
+        <input id="copies" type="number" min="1" step="1" placeholder="如 1000" disabled>
+      </div>
+      <div class="field">
+        <label for="makereadyWaste">每帖开机损耗张数</label>
+        <input id="makereadyWaste" type="number" min="0" step="1" placeholder="如 20" disabled>
+      </div>
+      <div class="field">
+        <label for="processWastePct">过程损耗率（%）</label>
+        <input id="processWastePct" type="number" min="0" max="99.99" step="0.01" placeholder="如 3 表示 3%" disabled>
+      </div>
+      <div class="field">
+        <label for="sheetsPerPack">每包张数</label>
+        <input id="sheetsPerPack" type="number" min="1" step="1" placeholder="如 500" disabled>
+      </div>
       <div class="field actions">
         <button type="submit">生成拼版</button>
       </div>
@@ -120,6 +142,14 @@
       <strong>折线标</strong>（中线上下两端）与<strong>套准十字</strong>（左右出血框外侧）；每个标记按固定候选位置顺序尝试，
       只有线段完整落在纸内、避开两侧出血框且不与已放置标记相交才落位，无可用位置则省略；背面标记由正面按长边 / 短边翻转
       做同一物理位置的坐标变换，保证正背套准。画布按纸张 mm 等比绘制，省略的标记逐张列出原因，导出 JSON 含每个标记的坐标与原因。
+    </p>
+    <p class="hint">
+      印刷备料（可选）：勾选后填写<strong>成品份数、每帖开机损耗张数、过程损耗率（百分数）与每包张数</strong>。
+      系统按每帖实际张数 × 份数计算净用纸，并以
+      <strong>需领纸 = ceil((净用纸 + 开机损耗) ÷ (1 − 过程损耗率))</strong> <strong>逐帖独立取整</strong>，
+      再汇总各帖净用纸 / 开机损耗 / 过程损耗 / 需领纸，最后按每包张数向上取整给出整包采购量与余量。
+      <strong>禁止先合并各帖再计算损耗</strong>（逐帖取整与按帖开机损耗都会影响领料数量）；
+      结果在下方「印刷备料」区逐帖展示并随拼版清单 JSON 一并导出。未勾选时流程与响应与之前完全一致。
     </p>
     <p class="error" id="errorBox" hidden></p>
   </section>
@@ -197,6 +227,24 @@
         <div id="verifyResult"></div>
       </aside>
     </div>
+
+    <section id="stockCard" class="stock-card" hidden>
+      <h2>印刷备料</h2>
+      <div class="summary" id="stockSummary"></div>
+      <div class="table-wrap">
+        <table id="stockTable">
+          <thead>
+            <tr>
+              <th>帖</th><th>实际张数</th><th>成品份数</th><th>净用纸（张）</th>
+              <th>开机损耗（张）</th><th>过程损耗（张）</th><th>损耗合计（张）</th><th>需领纸（张）</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+      <p class="hint" id="stockRule"></p>
+    </section>
 
     <h2>拼版清单</h2>
     <div class="table-wrap">

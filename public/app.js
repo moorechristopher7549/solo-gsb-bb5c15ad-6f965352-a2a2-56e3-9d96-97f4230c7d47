@@ -29,6 +29,16 @@ const chapterSplitBox = document.getElementById('chapterSplit');
 const chapterStartsInput = document.getElementById('chapterStarts');
 const productionMarksBox = document.getElementById('productionMarks');
 const markSizeInput = document.getElementById('markSizeMm');
+const stockPreparationBox = document.getElementById('stockPreparation');
+const copiesInput = document.getElementById('copies');
+const makereadyWasteInput = document.getElementById('makereadyWaste');
+const processWastePctInput = document.getElementById('processWastePct');
+const sheetsPerPackInput = document.getElementById('sheetsPerPack');
+const stockCard = document.getElementById('stockCard');
+const stockSummaryBox = document.getElementById('stockSummary');
+const stockTableBody = document.querySelector('#stockTable tbody');
+const stockTableFoot = document.querySelector('#stockTable tfoot');
+const stockRule = document.getElementById('stockRule');
 const obsForm = document.getElementById('obsForm');
 const obsSignature = document.getElementById('obsSignature');
 const obsSheet = document.getElementById('obsSheet');
@@ -65,6 +75,16 @@ productionMarksBox.addEventListener('change', () => {
 });
 markSizeInput.disabled = true;
 
+/* 印刷备料：四个参数输入仅在勾选启用时可填 */
+function syncStockInputs() {
+  const on = stockPreparationBox.checked;
+  [copiesInput, makereadyWasteInput, processWastePctInput, sheetsPerPackInput].forEach((el) => {
+    el.disabled = !on;
+  });
+}
+stockPreparationBox.addEventListener('change', syncStockInputs);
+syncStockInputs();
+
 /** 解析章节起始页输入：支持逗号 / 顿号 / 分号 / 空白分隔；无法解析的 token 原样上送，由服务端给出明确错误。 */
 function parseChapterStarts(raw) {
   return raw
@@ -74,6 +94,31 @@ function parseChapterStarts(raw) {
       const n = Number(token);
       return Number.isInteger(n) ? n : token;
     });
+}
+
+/**
+ * 印刷备料表单校验：返回错误信息字符串；全部合法返回 null。
+ * 份数 / 每包张数为 ≥1 整数，开机损耗为 ≥0 整数，损耗率为 0～99.99% 的数值。
+ */
+function validateStockInputs() {
+  const copies = Number(copiesInput.value);
+  if (copiesInput.value.trim() === '' || !Number.isInteger(copies) || copies < 1) {
+    return '启用印刷备料时，成品份数必须为 ≥ 1 的整数';
+  }
+  const makeready = Number(makereadyWasteInput.value);
+  if (makereadyWasteInput.value.trim() === '' || !Number.isInteger(makeready) || makeready < 0) {
+    return '启用印刷备料时，每帖开机损耗张数必须为 ≥ 0 的整数';
+  }
+  const pctRaw = processWastePctInput.value.trim();
+  const pct = Number(pctRaw);
+  if (pctRaw === '' || !Number.isFinite(pct) || pct < 0 || pct >= 100) {
+    return '启用印刷备料时，过程损耗率必须为 0 ~ 99.99 之间的百分数（如 3 表示 3%）';
+  }
+  const pack = Number(sheetsPerPackInput.value);
+  if (sheetsPerPackInput.value.trim() === '' || !Number.isInteger(pack) || pack < 1) {
+    return '启用印刷备料时，每包张数必须为 ≥ 1 的整数';
+  }
+  return null;
 }
 
 const state = {
@@ -111,6 +156,16 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault();
   errorBox.hidden = true;
 
+  // 印刷备料启用时先在前端做一轮明确校验（服务端仍会再次校验并返回 400）
+  if (stockPreparationBox.checked) {
+    const stockError = validateStockInputs();
+    if (stockError) {
+      errorBox.textContent = stockError;
+      errorBox.hidden = false;
+      return;
+    }
+  }
+
   const chapterSplit = chapterSplitBox.checked;
   const payload = {
     totalPages: Number(document.getElementById('totalPages').value),
@@ -133,6 +188,16 @@ form.addEventListener('submit', async (event) => {
     markSizeMm: productionMarksBox.checked && markSizeInput.value.trim() !== ''
       ? Number(markSizeInput.value)
       : undefined,
+    // 印刷备料：百分数输入换算为小数（5% -> 0.05）；未勾选时完全不上送，保持原请求体
+    stockPreparation: stockPreparationBox.checked,
+    ...(stockPreparationBox.checked
+      ? {
+          copies: Number(copiesInput.value),
+          makereadyWaste: Number(makereadyWasteInput.value),
+          processWasteRate: Number(processWastePctInput.value) / 100,
+          sheetsPerPack: Number(sheetsPerPackInput.value),
+        }
+      : {}),
   };
   // 已录入观察时随生成一并核验；无观察时请求体与原流程完全一致
   const requestBody = state.observations.length ? { ...payload, observations: observationPayload() } : payload;
@@ -203,6 +268,7 @@ function renderAll() {
   renderSummary();
   renderSheetNav();
   renderTable();
+  renderStock();
   jsonPreview.textContent = JSON.stringify(state.result, null, 2);
   renderObsPanel();
   draw();
@@ -288,6 +354,13 @@ function renderSummary() {
         ? { text: `生产标记：已放置 ${r.productionMarks.placedCount} 个（尺寸 ${formatMm(r.productionMarks.markSizeMm)} mm）`, cls: 'fit-ok' }
         : { text: `生产标记：放置 ${r.productionMarks.placedCount} 个 · 省略 ${r.productionMarks.omittedCount} 个`, cls: 'fit-fail' }
     );
+  }
+  if (r.stockPreparation && r.stockPreparation.enabled) {
+    const sp = r.stockPreparation;
+    chips.push({
+      text: `印刷备料：${sp.copies} 份 · 需领纸 ${sp.totalRequired} 张 · 采购 ${sp.packsToBuy} 包 / ${sp.sheetsToBuy} 张（每包 ${sp.sheetsPerPack} 张）`,
+      cls: 'stock',
+    });
   }
   summaryBox.innerHTML = '';
   chips.forEach(({ text, cls }) => {
@@ -432,6 +505,99 @@ function renderTable() {
       });
     });
   });
+}
+
+/* ------------------------------ 印刷备料 ------------------------------ */
+
+/** 百分数展示：0.05 -> "5%"（最多两位小数，去掉浮点尾数）。 */
+function formatPercent(rate) {
+  return `${Math.round(rate * 10000) / 100}%`;
+}
+
+function makeStockChip(text, cls) {
+  const span = document.createElement('span');
+  span.className = 'chip' + (cls ? ` ${cls}` : '');
+  span.textContent = text;
+  return span;
+}
+
+/** 渲染印刷备料区：汇总 chips + 逐帖净用纸 / 损耗 / 需领纸表 + 整包采购合计行。 */
+function renderStock() {
+  const sp = state.result && state.result.stockPreparation;
+  if (!sp || !sp.enabled) {
+    stockCard.hidden = true;
+    stockSummaryBox.innerHTML = '';
+    stockTableBody.innerHTML = '';
+    stockTableFoot.innerHTML = '';
+    return;
+  }
+  stockCard.hidden = false;
+
+  stockSummaryBox.innerHTML = '';
+  [
+    makeStockChip(`成品份数 ${sp.copies}`),
+    makeStockChip(`每帖开机损耗 ${sp.makereadyWaste} 张`, 'stock'),
+    makeStockChip(`过程损耗率 ${formatPercent(sp.processWasteRate)}`, 'stock'),
+    makeStockChip(`净用纸合计 ${sp.totalNetSheets} 张`, 'stock'),
+    makeStockChip(`开机损耗合计 ${sp.totalMakereadyWaste} 张`, 'stock'),
+    makeStockChip(`过程损耗合计 ${sp.totalProcessWaste} 张`, 'stock'),
+    makeStockChip(`损耗合计 ${sp.totalWaste} 张`, sp.totalWaste > 0 ? 'warn' : ''),
+    makeStockChip(`需领纸合计 ${sp.totalRequired} 张`, 'stock'),
+    makeStockChip(`每包 ${sp.sheetsPerPack} 张`, ''),
+    makeStockChip(`整包采购 ${sp.packsToBuy} 包 = ${sp.sheetsToBuy} 张`, 'stock-buy'),
+    makeStockChip(`采购余量 ${sp.spareSheets} 张`, sp.spareSheets > 0 ? 'saved' : ''),
+  ].forEach((chip) => stockSummaryBox.appendChild(chip));
+
+  stockTableBody.innerHTML = '';
+  sp.signatures.forEach((d) => {
+    const tr = document.createElement('tr');
+    [
+      `第 ${d.index} 帖`,
+      d.actualSheetCount,
+      sp.copies,
+      d.netSheets,
+      d.makereadyWasteSheets,
+      d.processWasteSheets,
+      d.wasteSheets,
+      d.requiredSheets,
+    ].forEach((t, i) => {
+      const td = document.createElement('td');
+      td.textContent = String(t);
+      if (i === 7) td.className = 'stock-required';
+      tr.appendChild(td);
+    });
+    stockTableBody.appendChild(tr);
+  });
+
+  stockTableFoot.innerHTML = '';
+  const footTr = document.createElement('tr');
+  [
+    `合计（${sp.signatures.length} 帖）`,
+    sp.signatures.reduce((s, d) => s + d.actualSheetCount, 0),
+    '—',
+    sp.totalNetSheets,
+    sp.totalMakereadyWaste,
+    sp.totalProcessWaste,
+    sp.totalWaste,
+    sp.totalRequired,
+  ].forEach((t, i) => {
+    const td = document.createElement('td');
+    td.textContent = String(t);
+    if (i === 7) td.className = 'stock-required';
+    footTr.appendChild(td);
+  });
+  stockTableFoot.appendChild(footTr);
+
+  // 整包采购单独一行（汇总后才按整包向上取整，明确不再按帖拆分）
+  const buyTr = document.createElement('tr');
+  buyTr.className = 'stock-buy-row';
+  const buyTd = document.createElement('td');
+  buyTd.colSpan = 8;
+  buyTd.textContent = `整包采购：ceil(${sp.totalRequired} ÷ ${sp.sheetsPerPack}) = ${sp.packsToBuy} 包，共 ${sp.sheetsToBuy} 张（采购余量 ${sp.spareSheets} 张）`;
+  buyTr.appendChild(buyTd);
+  stockTableFoot.appendChild(buyTr);
+
+  stockRule.textContent = `计算规则：${sp.rule}；各帖独立 ceil 后才汇总，整包采购在汇总后再次向上取整。`;
 }
 
 /* ------------------------------ 试印核验 ------------------------------ */

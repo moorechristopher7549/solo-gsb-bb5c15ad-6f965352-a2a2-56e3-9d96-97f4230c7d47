@@ -21,12 +21,16 @@ app.get('/api/health', (req, res) => {
  *   balancedSplit?, chapterSplit?, chapterStarts?,           // 可选，分帖模式（均衡 / 章节优先，互斥）
  *   paperWidth?, paperHeight?, pageWidth?, pageHeight?, bleedMm?, safetyMm?, // 可选，适配检查
  *   productionMarks?, markSizeMm?,                          // 可选，双面生产标记（需启用适配检查）
+ *   stockPreparation?, copies?, makereadyWaste?,            // 可选，印刷备料（逐帖净用纸 / 损耗 / 需领纸与整包采购）
+ *     processWasteRate?, sheetsPerPack?,
  *   observations?                                            // 可选，试印核验观察（1～12 条；缺省/空数组不启用）
  * }
  * 响应：拼版清单 JSON（与前端「导出拼版清单 JSON」内容一致）；
  * 启用试印核验时顶层带 verification（观察、四种装订×翻转候选的评分与结论）；
  * 启用双面生产标记时每张纸带 productionMarks（正背面标记线段坐标 / 省略原因），
- * 顶层 productionMarks 给出尺寸、正背坐标变换与放置 / 省略汇总。
+ * 顶层 productionMarks 给出尺寸、正背坐标变换与放置 / 省略汇总；
+ * 启用印刷备料时每帖带 stockPreparation（净用纸 / 开机损耗 / 过程损耗 / 需领纸），
+ * 顶层 stockPreparation 给出参数、逐帖取整后的汇总与整包采购（未启用时仅 { enabled: false }）。
  */
 app.post('/api/impose', (req, res) => {
   try {

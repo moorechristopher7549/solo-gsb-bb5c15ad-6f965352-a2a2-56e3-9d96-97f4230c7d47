@@ -2,6 +2,7 @@
 
 const { parseFitInput, attachFit } = require('./fitCheck');
 const { parseProductionMarksInput, attachProductionMarks } = require('./productionMarks');
+const { parseStockPrepInput, attachStockPreparation } = require('./stockPrep');
 const { attachVerification } = require('./verification');
 
 /**
@@ -66,6 +67,18 @@ const { attachVerification } = require('./verification');
  * - 标记坐标取自 trim / bleedBox（含爬移偏移），纸张尺寸或爬移参数变化时
  *   在同一次重算中同步重算。未启用（缺省 / false）时不带任何标记字段，
  *   现有响应完全不变。
+ *
+ * 印刷备料（print stock preparation）：
+ * - 可选启用（stockPreparation = true），参数：成品份数 copies、每帖开机损耗张数
+ *   makereadyWaste、过程损耗率 processWasteRate（[0,1) 的小数）与每包张数 sheetsPerPack。
+ * - 系统按每帖实际张数 × 份数计算净用纸，并以
+ *     需领纸 = ceil((净用纸 + 开机损耗) / (1 - 过程损耗率))
+ *   逐帖独立取整；随后才汇总各帖（总净用纸 / 总损耗 / 总需领纸），
+ *   再按每包张数 ceil 向上取整得到整包采购量。禁止先合并各帖再计算损耗
+ *   （合并口径会少算逐帖取整与按帖开机损耗）。
+ * - 每帖附 stockPreparation（净用纸 / 开机损耗 / 过程损耗 / 需领纸），
+ *   顶层 stockPreparation 给出参数、汇总与整包采购数；未启用（缺省 / false）时
+ *   仅有 { enabled: false }，不向帖对象写任何字段，现有响应完全不变。
  */
 
 const MAX_TOTAL_PAGES = 10000;
@@ -232,6 +245,11 @@ function planChapterSignatures(totalPages, maxSheets, starts) {
  * @param {Array<object>} [input.observations] 试印核验观察（1～12 条；缺省 / 空数组不启用核验）
  * @param {boolean} [input.productionMarks] 是否启用双面生产标记（缺省 false；启用时必须已提供四项尺寸开启适配检查）
  * @param {number} [input.markSizeMm] 生产标记尺寸（mm，>0 且 ≤100，缺省 5；仅启用生产标记时校验）
+ * @param {boolean} [input.stockPreparation] 是否启用印刷备料（缺省 false；启用后按逐帖实际张数计算净用纸 / 损耗 / 需领纸与整包采购）
+ * @param {number} [input.copies] 成品份数（≥1 整数；仅启用印刷备料时必填）
+ * @param {number} [input.makereadyWaste] 每帖开机损耗张数（≥0 整数；仅启用印刷备料时必填）
+ * @param {number} [input.processWasteRate] 过程损耗率（≥0 且 <1 的小数，如 0.03 = 3%；仅启用印刷备料时必填）
+ * @param {number} [input.sheetsPerPack] 每包张数（≥1 整数；仅启用印刷备料时必填）
  * @returns {object} 拼版结果（按帖 -> 张 -> 正/背面 -> 左/右页位；启用适配检查时每个页位带 fit；
  *                   启用双面生产标记时每张纸带 productionMarks、顶层带 productionMarks 汇总；
  *                   启用试印核验时顶层带 verification：观察、候选评分与结论）
@@ -247,6 +265,7 @@ function computeImposition(input) {
   const chapterSplit = input && input.chapterSplit === true;
   const fit = parseFitInput(input || {});
   const productionMarks = parseProductionMarksInput(input || {}, fit.enabled);
+  const stockPrep = parseStockPrepInput(input || {});
 
   if (!Number.isInteger(totalPages) || totalPages < 1 || totalPages > MAX_TOTAL_PAGES) {
     throw new Error(`成品页数必须为 1 ~ ${MAX_TOTAL_PAGES} 的整数`);
@@ -456,7 +475,7 @@ function computeImposition(input) {
   const result = {
     meta: {
       app: 'saddle-stitch-imposition',
-      version: '1.7.0',
+      version: '1.8.0',
       generatedAt: new Date().toISOString(),
     },
     input: {
@@ -477,6 +496,16 @@ function computeImposition(input) {
       safetyMm: fit.safetyMm,
       productionMarks: productionMarks.enabled,
       markSizeMm: productionMarks.enabled ? productionMarks.markSizeMm : 0,
+      // 印刷备料参数仅在启用时回显（未启用时响应字段与旧版本完全一致）
+      ...(stockPrep.enabled
+        ? {
+            stockPreparation: true,
+            copies: stockPrep.copies,
+            makereadyWaste: stockPrep.makereadyWaste,
+            processWasteRate: stockPrep.processWasteRate,
+            sheetsPerPack: stockPrep.sheetsPerPack,
+          }
+        : {}),
     },
     pagesPerSignature: maxPagesPerSignature,
     signatureCount,
@@ -514,6 +543,11 @@ function computeImposition(input) {
   // 页码拼版 / 适配检查 / 爬移结果与原流程完全一致；启用后逐张附加
   // productionMarks（正面放置、背面按翻转做同一物理位置坐标变换）。
   result.productionMarks = attachProductionMarks(result, productionMarks);
+
+  // 印刷备料：未启用时返回 { enabled: false }，不向帖对象写入任何字段；
+  // 启用后按每帖实际张数 × 份数计净用纸，逐帖 ceil((净用纸+开机损耗)/(1-损耗率))
+  // 取整后再汇总，最后按每包张数向上取整采购（禁止先合并各帖再算损耗）。
+  result.stockPreparation = attachStockPreparation(result, stockPrep);
 
   // 试印核验：observations 缺省 / 为空时返回 { enabled: false }，原流程完全不变；
   // 非法索引、重复观察等抛出明确错误（由调用方转为 400）。

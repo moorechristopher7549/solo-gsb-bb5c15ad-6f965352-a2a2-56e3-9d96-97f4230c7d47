@@ -189,6 +189,47 @@ button.ghost:disabled {
   font-weight: 600;
 }
 
+.summary .chip.stock {
+  background: #e8f5f3;
+  color: #0f766e;
+}
+
+.summary .chip.stock-buy {
+  background: #0f766e;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.stock-card {
+  margin: 22px 0;
+  padding: 16px 18px;
+  border: 1px solid #d8e2ee;
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.stock-card h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+#stockTable td.stock-required,
+#stockTable th:nth-child(8) {
+  font-weight: 700;
+  color: #0f766e;
+}
+
+#stockTable tfoot td {
+  background: #eef6f5;
+  font-weight: 600;
+}
+
+#stockTable .stock-buy-row td {
+  background: #0f766e;
+  color: #ffffff;
+  text-align: center;
+}
+
 .slot-fit {
   margin-top: 2px;
   font-size: 12px;
